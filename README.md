@@ -214,7 +214,14 @@ CCS가 응답하면 래퍼 설치로 진행.
 
 ## 래퍼 설치
 
-### 1. 의존성
+### 1. 저장소 클론
+
+```bash
+git clone https://github.com/bitkyc08-arch/ccs-wrapper.git
+cd ccs-wrapper
+```
+
+### 2. 의존성 설치
 
 ```bash
 pip install -r requirements.txt
@@ -222,14 +229,14 @@ pip install -r requirements.txt
 pip install fastapi uvicorn httpx
 ```
 
-### 2. 실행 테스트
+### 3. 실행 테스트
 
 ```bash
 python3 thinking-wrapper.py --port 8318
 curl http://localhost:8318/health
 ```
 
-### 3. 백그라운드 서비스 등록 (macOS launchd)
+### 4. 백그라운드 서비스 등록 (macOS launchd)
 
 ```bash
 cat > ~/Library/LaunchAgents/com.ccs.thinking-wrapper.plist << 'EOF'
