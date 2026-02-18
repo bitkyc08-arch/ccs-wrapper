@@ -143,10 +143,47 @@ async def _handle_thinking(body: dict, model: str, is_stream: bool):
 
         if role == "system":
             system_content = content if isinstance(content, str) else str(content)
-        elif role in ("user", "assistant"):
-            anthropic_messages.append({"role": role, "content": content})
+
+        elif role == "assistant":
+            # assistant + tool_calls → Anthropic content blocks
+            tool_calls_data = msg.get("tool_calls", [])
+            if tool_calls_data:
+                blocks = []
+                if content:
+                    blocks.append({"type": "text", "text": content})
+                for tc in tool_calls_data:
+                    func = tc.get("function", {})
+                    try:
+                        input_data = json.loads(func.get("arguments", "{}"))
+                    except json.JSONDecodeError:
+                        input_data = {"raw": func.get("arguments", "")}
+                    blocks.append({
+                        "type": "tool_use",
+                        "id": tc.get("id", f"call_{int(time.time())}"),
+                        "name": func.get("name", ""),
+                        "input": input_data,
+                    })
+                anthropic_messages.append({"role": "assistant", "content": blocks})
+            else:
+                anthropic_messages.append({"role": "assistant", "content": content})
+
         elif role == "tool":
-            anthropic_messages.append({"role": "user", "content": f"[Tool Result] {content}"})
+            # tool result → Anthropic tool_result content block (user role)
+            tool_call_id = msg.get("tool_call_id", "")
+            result_content = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False)
+            tool_result_block = {
+                "type": "tool_result",
+                "tool_use_id": tool_call_id,
+                "content": result_content,
+            }
+            # 이전 메시지가 user이고 content가 list면 합침
+            if anthropic_messages and anthropic_messages[-1]["role"] == "user" and isinstance(anthropic_messages[-1]["content"], list):
+                anthropic_messages[-1]["content"].append(tool_result_block)
+            else:
+                anthropic_messages.append({"role": "user", "content": [tool_result_block]})
+
+        elif role == "user":
+            anthropic_messages.append({"role": "user", "content": content})
 
     if not anthropic_messages:
         anthropic_messages = [{"role": "user", "content": "Hello"}]
@@ -155,7 +192,19 @@ async def _handle_thinking(body: dict, model: str, is_stream: bool):
     merged = []
     for msg in anthropic_messages:
         if merged and merged[-1]["role"] == msg["role"]:
-            merged[-1]["content"] += "\n\n" + msg["content"]
+            prev = merged[-1]["content"]
+            curr = msg["content"]
+            # 둘 다 string이면 합침
+            if isinstance(prev, str) and isinstance(curr, str):
+                merged[-1]["content"] = prev + "\n\n" + curr
+            # 둘 다 list면 extend
+            elif isinstance(prev, list) and isinstance(curr, list):
+                prev.extend(curr)
+            # 하나가 string, 하나가 list → list로 통합
+            elif isinstance(prev, str) and isinstance(curr, list):
+                merged[-1]["content"] = [{"type": "text", "text": prev}] + curr
+            elif isinstance(prev, list) and isinstance(curr, str):
+                prev.append({"type": "text", "text": curr})
         else:
             merged.append(dict(msg))
     anthropic_messages = merged
