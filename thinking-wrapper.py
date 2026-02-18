@@ -2,10 +2,14 @@
 """
 thinking-wrapper.py — SSE Streaming + Thinking + Codex Effort 변환 프록시
 
+지원 엔드포인트:
+  /v1/chat/completions — OpenAI 형식 (VS Code Copilot BYOK 등)
+  /v1/messages         — Anthropic 형식 (Claude Code CLI 등)
+
 지원하는 변환:
-1. Claude Thinking 모델: OpenAI → Anthropic Messages + thinking → SSE 변환 응답
-2. Codex Effort 모델: effort 접미사 파싱 → Codex Provider SSE passthrough
-3. 나머지 모델: CCS SSE passthrough
+1. Claude Thinking 모델: thinking 파라미터 자동 삽입
+2. Codex Effort 모델: effort 접미사 파싱 → reasoning_effort 삽입
+3. 나머지 모델: CCS 패스스루
 
 Usage:
     python3 thinking-wrapper.py [--port 8318]
@@ -27,8 +31,20 @@ CCS_API_KEY = "ccs-internal-managed"
 
 # Claude thinking 모델: Anthropic Messages로 변환
 THINKING_MODELS = {
-    "claude-opus-4-6-thinking":   {"effort": "high", "max_tokens": 128000},
-    "claude-sonnet-4-5-thinking": {"effort": "medium", "max_tokens": 64000},
+    "claude-opus-4-6-thinking":   {"effort": "max", "max_tokens": 128000},
+    "claude-sonnet-4-5-thinking": {"effort": "high", "max_tokens": 64000},
+}
+
+# 모델 별칭: Claude Code 내부 모델명 → CCS 실제 모델명
+# Claude Code는 Haiku 슬롯을 분류/카운팅에 사용 → Sonnet 4.6으로 업그레이드
+MODEL_ALIASES = {
+    # Haiku 슬롯 → Sonnet 4.6 업그레이드
+    "claude-haiku-4-5-20251001": "claude-sonnet-4-6",
+    "claude-haiku-4-5":          "claude-sonnet-4-6",
+    # Sonnet 슬롯 (기본 모델) → Codex xhigh 리맵
+    "claude-sonnet-4-5-20250929": "gpt-5.3-codex-xhigh",
+    "claude-sonnet-4-5":          "gpt-5.3-codex-xhigh",
+    "claude-sonnet-4":            "gpt-5.3-codex-xhigh",
 }
 
 # Codex effort 접미사 패턴
@@ -405,20 +421,150 @@ async def _thinking_to_sse(completion_id: str, model: str, text: str, reasoning:
     yield "data: [DONE]\n\n"
 
 
+# =====================================================================
+# /v1/messages — Anthropic Messages API (Claude Code CLI 등)
+# =====================================================================
+
+@app.post("/v1/messages")
+@app.post("/v1/messages/{path:path}")
+async def messages(request: Request, path: str = ""):
+    """Anthropic Messages API — Claude Code CLI에서 직접 사용"""
+    # count_tokens 등 서브경로 → CCS로 그대로 전달
+    if path:
+        body = await request.json()
+        url = f"{CCS_BASE}/v1/messages/{path}"
+        qs = str(request.query_params)
+        if qs:
+            url += f"?{qs}"
+        headers = {**CCS_HEADERS, "anthropic-version": "2023-06-01"}
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(url, json=body, headers=headers)
+        return JSONResponse(content=r.json(), status_code=r.status_code)
+
+    body = await request.json()
+    model = body.get("model", "")
+    is_stream = body.get("stream", False)
+
+    # 모델 별칭 치환 (haiku → sonnet 4.6 등)
+    if model in MODEL_ALIASES:
+        original = model
+        model = MODEL_ALIASES[model]
+        body["model"] = model
+        print(f"📨 [messages] {original} → {model} stream={is_stream} msgs={len(body.get('messages',[]))}")
+    else:
+        print(f"📨 [messages] {model} stream={is_stream} msgs={len(body.get('messages',[]))}")
+
+    # --- Route 1: Claude Thinking 모델 ---
+    if model in THINKING_MODELS:
+        return await _handle_thinking_messages(body, model, is_stream)
+
+    # --- Route 2: Codex Effort 접미사 모델 ---
+    match = EFFORT_SUFFIXES.match(model)
+    if match:
+        base_model = match.group(1)
+        effort = match.group(2)
+        return await _handle_codex_effort_messages(body, base_model, effort, is_stream)
+
+    # --- Route 3: 일반 모델 passthrough ---
+    return await _messages_passthrough(f"{CCS_BASE}/v1/messages", body, is_stream)
+
+
+async def _handle_thinking_messages(body: dict, model: str, is_stream: bool):
+    """Claude thinking: thinking 파라미터 삽입 → CCS /v1/messages"""
+    config = THINKING_MODELS[model]
+    effort = body.get("thinking", {}).get("effort", config["effort"])
+
+    # thinking 파라미터 삽입 (없으면 추가, 있으면 유지)
+    if "thinking" not in body:
+        body["thinking"] = {"type": "adaptive", "effort": effort}
+
+    # max_tokens cap: Antigravity 200K context 제한
+    if body.get("max_tokens", 0) > 16000:
+        body["max_tokens"] = 16000
+
+    print(f"🔍 [messages] Thinking: {model}, effort={effort}, stream={is_stream}")
+    return await _messages_passthrough(f"{CCS_BASE}/v1/messages", body, is_stream)
+
+
+async def _handle_codex_effort_messages(body: dict, base_model: str, effort: str, is_stream: bool):
+    """Codex effort: 접미사 파싱 → reasoning_effort 삽입 → Codex provider"""
+    body["model"] = base_model
+    body["reasoning_effort"] = effort
+
+    print(f"🔧 [messages] Codex effort: {base_model} + {effort}, stream={is_stream}")
+    return await _messages_passthrough(
+        f"{CCS_BASE}/api/provider/codex/v1/messages", body, is_stream
+    )
+
+
+async def _messages_passthrough(url: str, body: dict, is_stream: bool):
+    """Anthropic Messages 형식 요청을 CCS로 전달 (스트리밍/비스트리밍)"""
+    headers = {
+        **CCS_HEADERS,
+        "anthropic-version": "2023-06-01",
+    }
+
+    if is_stream:
+        # SSE 스트리밍: CCS의 Anthropic SSE를 그대로 전달
+        body["stream"] = True
+        async def generate():
+            async with httpx.AsyncClient(timeout=300) as client:
+                async with client.stream(
+                    "POST", url, json=body, headers=headers,
+                ) as response:
+                    async for line in response.aiter_lines():
+                        if line:
+                            yield line + "\n"
+                        else:
+                            yield "\n"
+        return StreamingResponse(
+            generate(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            },
+        )
+    else:
+        # 비스트리밍: JSON 응답 그대로 전달
+        async with httpx.AsyncClient(timeout=300) as client:
+            r = await client.post(url, json=body, headers=headers)
+
+        if r.status_code != 200:
+            print(f"⚠️ [messages] upstream {r.status_code}: {r.text[:200]}")
+            return JSONResponse(content=r.json(), status_code=r.status_code)
+
+        result = r.json()
+
+        # 💰 Token usage logging
+        usage = result.get("usage", {})
+        print(f"💰 Usage: in={usage.get('input_tokens',0)} out={usage.get('output_tokens',0)}")
+
+        return JSONResponse(content=result, status_code=200)
+
+
 @app.get("/health")
 async def health():
-    return {"status": "ok", "backend": CCS_BASE, "routes": ["thinking+sse", "codex-effort+sse", "passthrough+sse"]}
+    return {
+        "status": "ok",
+        "backend": CCS_BASE,
+        "endpoints": {
+            "/v1/chat/completions": ["thinking+sse", "codex-effort+sse", "passthrough+sse"],
+            "/v1/messages": ["thinking", "codex-effort", "passthrough"],
+        },
+    }
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="CCS Wrapper (SSE Streaming)")
+    parser = argparse.ArgumentParser(description="CCS Wrapper (SSE + Messages)")
     parser.add_argument("--port", type=int, default=8318)
     parser.add_argument("--host", default="0.0.0.0")
     args = parser.parse_args()
 
-    print(f"🧠 CCS Wrapper Proxy (SSE) starting on {args.host}:{args.port}")
+    print(f"🧠 CCS Wrapper Proxy starting on {args.host}:{args.port}")
     print(f"   Backend: {CCS_BASE}")
+    print(f"   Endpoints: /v1/chat/completions, /v1/messages")
     print(f"   Claude thinking: {list(THINKING_MODELS.keys())}")
     print(f"   Codex effort: regex {EFFORT_SUFFIXES.pattern}")
-    print(f"   All routes: SSE streaming")
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
