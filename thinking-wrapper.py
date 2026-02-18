@@ -270,6 +270,14 @@ async def _handle_thinking(body: dict, model: str, is_stream: bool):
 
     result = r.json()
 
+    # 💰 Token usage logging
+    usage = result.get("usage", {})
+    input_tokens = usage.get("input_tokens", 0)
+    output_tokens = usage.get("output_tokens", 0)
+    cache_read = usage.get("cache_read_input_tokens", 0)
+    cache_creation = usage.get("cache_creation_input_tokens", 0)
+    print(f"💰 Usage: in={input_tokens} out={output_tokens} cache_read={cache_read} cache_create={cache_creation} total={input_tokens + output_tokens}")
+
     # Anthropic response → thinking + text + tool_use 분리
     reasoning_content = None
     text_content = ""
@@ -390,7 +398,7 @@ async def _thinking_to_sse(completion_id: str, model: str, text: str, reasoning:
                     "function": {"arguments": args[i:i + args_chunk_size]},
                 }]})
 
-    # 4. finish
+    # 4. finish with usage
     yield chunk({}, fr=finish_reason)
 
     # 5. done
