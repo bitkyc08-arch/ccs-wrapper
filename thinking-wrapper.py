@@ -38,9 +38,9 @@ THINKING_MODELS = {
 # 모델 별칭: Claude Code 내부 모델명 → CCS 실제 모델명
 # Claude Code는 Haiku 슬롯을 분류/카운팅에 사용 → Sonnet 4.6으로 업그레이드
 MODEL_ALIASES = {
-    # Haiku 슬롯 → Sonnet 4.6 업그레이드
-    "claude-haiku-4-5-20251001": "claude-sonnet-4-6",
-    "claude-haiku-4-5":          "claude-sonnet-4-6",
+    # Haiku 슬롯 → GPT-5 Mini (Copilot 경량 모델)
+    "claude-haiku-4-5-20251001": "gpt-5-mini",
+    "claude-haiku-4-5":          "gpt-5-mini",
     # Sonnet 슬롯 (기본 모델) → Codex xhigh 리맵
     "claude-sonnet-4-5-20250929": "gpt-5.3-codex-xhigh",
     "claude-sonnet-4-5":          "gpt-5.3-codex-xhigh",
@@ -62,15 +62,40 @@ CCS_HEADERS = {
 }
 
 
+# Antigravity thinking 없는 Claude 모델 필터링 (단속 회피)
+# 이 패턴에 매칭되면서 -thinking 으로 끝나지 않는 모델을 제거
+_CLAUDE_MODEL_RE = re.compile(r"^(gemini-)?claude-")
+
+
+def _should_hide_model(model_id: str) -> bool:
+    """Antigravity의 non-thinking Claude 모델을 숨긴다."""
+    if not _CLAUDE_MODEL_RE.match(model_id):
+        return False
+    # thinking 접미사가 있으면 유지
+    if model_id.endswith("-thinking"):
+        return False
+    return True
+
+
 @app.get("/v1/models")
 async def list_models():
-    """CCS의 모델 목록을 그대로 전달"""
+    """CCS 모델 목록에서 non-thinking Claude 모델 필터링 후 전달"""
     async with httpx.AsyncClient(timeout=10) as client:
         r = await client.get(
             f"{CCS_BASE}/v1/models",
             headers={"Authorization": f"Bearer {CCS_API_KEY}"},
         )
-        return JSONResponse(content=r.json(), status_code=r.status_code)
+        data = r.json()
+        if "data" in data:
+            original_count = len(data["data"])
+            data["data"] = [
+                m for m in data["data"]
+                if not _should_hide_model(m.get("id", ""))
+            ]
+            hidden = original_count - len(data["data"])
+            if hidden:
+                print(f"🚫 Models: {hidden}개 non-thinking Claude 모델 숨김")
+        return JSONResponse(content=data, status_code=r.status_code)
 
 
 @app.post("/v1/chat/completions")

@@ -65,11 +65,11 @@ flowchart LR
     subgraph "래퍼 리맵"
         O -->|그대로| OT["claude-opus-4-6-thinking\n🧠 thinking max"]
         S -->|"리맵"| SX["gpt-5.3-codex-xhigh\n⚡ Codex xhigh"]
-        H -->|"리맵"| HS["claude-sonnet-4-6\n📝 Sonnet 4.6"]
+        H -->|"리맵"| HM["gpt-5-mini\n🚀 GPT-5 Mini"]
     end
 
     style SX fill:#2d5a27,stroke:#4ade80,color:#fff
-    style HS fill:#1e3a5f,stroke:#60a5fa,color:#fff
+    style HM fill:#1e3a5f,stroke:#60a5fa,color:#fff
     style OT fill:#5a2d27,stroke:#f87171,color:#fff
 ```
 
@@ -406,7 +406,7 @@ claude
 
 ```python
 MODEL_ALIASES = {
-    "claude-haiku-4-5-20251001": "claude-sonnet-4-6",      # Haiku → ?
+    "claude-haiku-4-5-20251001": "gpt-5-mini",             # Haiku → ?
     "claude-sonnet-4-5-20250929": "gpt-5.3-codex-xhigh",   # Sonnet → ?
 }
 ```
@@ -437,7 +437,7 @@ tail -f /tmp/ccs-wrapper-stdout.log
 
 ### 실제 로그 예시
 
-아래는 Claude Code CLI에서 `claude`(기본 Sonnet)를 실행했을 때 래퍼 로그다. Sonnet → Codex xhigh 리맵과 Haiku → Sonnet 4.6 리맵이 동시에 동작하는 걸 볼 수 있다:
+아래는 Claude Code CLI에서 `claude`(기본 Sonnet)를 실행했을 때 래퍼 로그다. Sonnet → Codex xhigh 리맵과 Haiku → GPT-5 Mini 리맵이 동시에 동작하는 걸 볼 수 있다:
 
 ```log
 📨 [messages] claude-sonnet-4-5-20250929 → gpt-5.3-codex-xhigh stream=True msgs=5
@@ -448,7 +448,7 @@ INFO:     127.0.0.1:55457 - "POST /v1/messages?beta=true HTTP/1.1" 200 OK
 🔧 [messages] Codex effort: gpt-5.3-codex + xhigh, stream=True
 INFO:     127.0.0.1:55468 - "POST /v1/messages?beta=true HTTP/1.1" 200 OK
 
-📨 [messages] claude-haiku-4-5-20251001 → claude-sonnet-4-6 stream=True msgs=1
+📨 [messages] claude-haiku-4-5-20251001 → gpt-5-mini stream=True msgs=1
 INFO:     127.0.0.1:55476 - "POST /v1/messages?beta=true HTTP/1.1" 200 OK
 
 📨 [messages] claude-opus-4-6 stream=True msgs=1
