@@ -30,9 +30,11 @@ CCS_BASE = "http://localhost:8317"
 CCS_API_KEY = "ccs-internal-managed"
 
 # Claude thinking 모델: Anthropic Messages로 변환
+# ccs_model: CCS에 전달할 실제 모델명 (CCS는 -thinking 접미사를 모를 수 있음)
 THINKING_MODELS = {
-    "claude-opus-4-6-thinking":   {"effort": "max", "max_tokens": 128000},
-    "claude-sonnet-4-5-thinking": {"effort": "high", "max_tokens": 64000},
+    "claude-opus-4-6-thinking":   {"ccs_model": "claude-opus-4-6-thinking", "effort": "max", "max_tokens": 128000},
+    "claude-sonnet-4-6-thinking": {"ccs_model": "claude-sonnet-4-6",         "effort": "high", "max_tokens": 64000},
+    "claude-sonnet-4-5-thinking": {"ccs_model": "claude-sonnet-4-5-thinking", "effort": "high", "max_tokens": 64000},
 }
 
 # 모델 별칭: Claude Code 내부 모델명 → CCS 실제 모델명
@@ -499,6 +501,10 @@ async def _handle_thinking_messages(body: dict, model: str, is_stream: bool):
     config = THINKING_MODELS[model]
     effort = body.get("thinking", {}).get("effort", config["effort"])
 
+    # CCS 실제 모델명으로 치환 (e.g. claude-sonnet-4-6-thinking → claude-sonnet-4-6)
+    ccs_model = config.get("ccs_model", model)
+    body["model"] = ccs_model
+
     # thinking 파라미터 삽입 (없으면 추가, 있으면 유지)
     if "thinking" not in body:
         body["thinking"] = {"type": "adaptive", "effort": effort}
@@ -507,7 +513,7 @@ async def _handle_thinking_messages(body: dict, model: str, is_stream: bool):
     if body.get("max_tokens", 0) > 16000:
         body["max_tokens"] = 16000
 
-    print(f"🔍 [messages] Thinking: {model}, effort={effort}, stream={is_stream}")
+    print(f"🔍 [messages] Thinking: {model} → {ccs_model}, effort={effort}, stream={is_stream}")
     return await _messages_passthrough(f"{CCS_BASE}/v1/messages", body, is_stream)
 
 
