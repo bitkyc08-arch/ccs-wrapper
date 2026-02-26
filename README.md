@@ -217,7 +217,7 @@ CCS가 응답하면 래퍼 설치로 진행.
 ### 1. 저장소 클론
 
 ```bash
-git clone https://github.com/bitkyc08-arch/ccs-wrapper.git
+git clone https://github.com/lidge-jun/ccs-wrapper.git
 cd ccs-wrapper
 ```
 
